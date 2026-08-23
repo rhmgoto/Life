@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [react()],
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   resolve: { alias: { '@': path.resolve(__dirname, '.') } },
   css: { postcss: { plugins: [tailwindcss()] } },
   publicDir: 'public',
