@@ -6,8 +6,8 @@ $port = 8765
 $url = "http://127.0.0.1:$port/"
 
 if (-not (Test-Path -LiteralPath (Join-Path $siteRoot 'index.html'))) {
-  Write-Host 'MyLog の公開ファイルが見つかりません。先に pnpm build:pages を実行してください。' -ForegroundColor Red
-  Read-Host 'Enterキーで閉じる'
+  Write-Host 'MyLog files were not found. Run pnpm build:pages first.' -ForegroundColor Red
+  Read-Host 'Press Enter to close'
   exit 1
 }
 
@@ -25,8 +25,8 @@ $mimeTypes = @{
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
 try {
   $listener.Start()
-  Write-Host "MyLog を $url で起動しました。" -ForegroundColor Green
-  Write-Host 'このウィンドウを閉じるとMyLogを終了します。'
+  Write-Host "MyLog is running at $url" -ForegroundColor Green
+  Write-Host 'Keep this window open while using MyLog.'
   if (-not $NoBrowser) { Start-Process $url }
 
   while ($true) {
@@ -70,8 +70,12 @@ try {
     }
   }
 } catch [System.Net.Sockets.SocketException] {
-  Write-Host "MyLogを起動できませんでした。ポート $port が使用中の可能性があります。" -ForegroundColor Red
-  Read-Host 'Enterキーで閉じる'
+  Write-Host "MyLog could not start. Port $port may already be in use." -ForegroundColor Red
+  Read-Host 'Press Enter to close'
+  exit 1
+} catch {
+  Write-Host "MyLog could not start: $($_.Exception.Message)" -ForegroundColor Red
+  Read-Host 'Press Enter to close'
   exit 1
 } finally {
   $listener.Stop()
