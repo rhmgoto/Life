@@ -2,6 +2,7 @@ import type { AppData, EventDraft, LogDraft, LogEntry, ScheduleEvent } from '@/d
 
 export interface LogRepository {
   getAll(): Promise<AppData>;
+  importData(data: AppData): Promise<void>;
   saveLog(draft: LogDraft, id?: string): Promise<LogEntry>;
   deleteLog(id: string): Promise<void>;
   saveEvent(draft: EventDraft, id?: string): Promise<ScheduleEvent>;

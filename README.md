@@ -11,9 +11,22 @@
 - `data`: RepositoryインターフェースとIndexedDB実装
 - `integrations`: Google CalendarおよびAI連携の境界
 
-## 保存について
+## 保存と同期
 
-現在は各ブラウザのIndexedDBへ保存します。同じURLを使っても端末間では同期されません。将来のクラウドDB移行では `LogRepository` の実装を差し替えます。
+Supabaseを設定すると、ログインした利用者の記録と予定をクラウドへ保存し、端末間で自動同期します。IndexedDBはオフライン時の保存先と未送信キューとして残るため、通信が戻ると再送されます。未設定時は従来どおり端末内だけで動作します。
+
+### Supabaseの設定
+
+1. Supabaseでプロジェクトを作成します。
+2. Dashboardの **SQL Editor** で `supabase/schema.sql` を実行します。
+3. **Authentication → URL Configuration** でSite URLを `https://rhmgoto.github.io/Life/` にし、同じURLをRedirect URLsにも追加します。
+4. **Project Settings → API** からProject URLとPublishable key（旧anon key）を確認します。
+5. `public/config.js` の空欄へ2つの値を設定します。`service_role`キーは絶対に設定しないでください。
+6. `pnpm build:pages` を実行してGitHubへpushします。
+
+初回ログイン時、その端末のIndexedDBにある記録をクラウドの記録と統合します。以後は30秒ごと、オンライン復帰時、画面へ戻った時にも同期します。
+
+アプリの「保存と同期」から、全記録をJSONで書き出し・復元できます。クラウド同期とは別に、定期的なバックアップを推奨します。
 
 ## 開発
 
@@ -37,4 +50,4 @@ pnpm build:pages
 
 公開URLをiPhoneのSafariで開けばそのまま利用できます。共有メニューの **ホーム画面に追加** を選ぶと、アプリに近い形で起動できます。
 
-> 現在のデータはブラウザごとのIndexedDBに保存されます。WindowsとiPhoneでURLを共有しても、記録データ自体は同期されません。端末間同期には次の段階でクラウドDBと認証が必要です。
+> Supabase未設定時は、データがブラウザごとのIndexedDBだけに保存され、端末間では同期されません。

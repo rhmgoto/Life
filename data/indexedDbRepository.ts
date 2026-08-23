@@ -4,6 +4,8 @@ import { createSeedData } from './seed';
 
 const DB_NAME = 'mylog';
 const STORE_NAME = 'records';
+const QUEUE_STORE_NAME = 'sync-queue';
+const META_STORE_NAME = 'metadata';
 const DATA_KEY = 'app-data-v1';
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const newId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
@@ -13,8 +15,12 @@ export class IndexedDbLogRepository implements LogRepository {
 
   private open(): Promise<IDBDatabase> {
     if (!this.dbPromise) this.dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME);
+      const request = indexedDB.open(DB_NAME, 2);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME);
+        if (!request.result.objectStoreNames.contains(QUEUE_STORE_NAME)) request.result.createObjectStore(QUEUE_STORE_NAME, { keyPath: 'id' });
+        if (!request.result.objectStoreNames.contains(META_STORE_NAME)) request.result.createObjectStore(META_STORE_NAME);
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
@@ -45,6 +51,69 @@ export class IndexedDbLogRepository implements LogRepository {
   }
 
   getAll(): Promise<AppData> { return this.read(); }
+
+  async importData(imported: AppData): Promise<void> {
+    const current = await this.read();
+    const merge = <T extends { id: string; updatedAt: string }>(existing: T[], incoming: T[]): T[] => {
+      const records = new Map(existing.map((item) => [item.id, item]));
+      incoming.forEach((item) => {
+        const previous = records.get(item.id);
+        if (!previous || item.updatedAt >= previous.updatedAt) records.set(item.id, clone(item));
+      });
+      return [...records.values()];
+    };
+    await this.write({ logs: merge(current.logs, imported.logs), events: merge(current.events, imported.events) });
+  }
+
+  replaceAll(data: AppData): Promise<void> { return this.write(data); }
+
+  async getPendingChanges(): Promise<PendingChange[]> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(QUEUE_STORE_NAME).objectStore(QUEUE_STORE_NAME).getAll();
+      request.onsuccess = () => resolve(request.result as PendingChange[]);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async putPendingChange(change: PendingChange): Promise<void> {
+    const db = await this.open();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(QUEUE_STORE_NAME, 'readwrite');
+      tx.objectStore(QUEUE_STORE_NAME).put(clone(change));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async deletePendingChange(id: string): Promise<void> {
+    const db = await this.open();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(QUEUE_STORE_NAME, 'readwrite');
+      tx.objectStore(QUEUE_STORE_NAME).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async getMetadata(key: string): Promise<string | undefined> {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const request = db.transaction(META_STORE_NAME).objectStore(META_STORE_NAME).get(key);
+      request.onsuccess = () => resolve(request.result as string | undefined);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async setMetadata(key: string, value: string): Promise<void> {
+    const db = await this.open();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(META_STORE_NAME, 'readwrite');
+      tx.objectStore(META_STORE_NAME).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
 
   async saveLog(draft: LogDraft, id?: string): Promise<LogEntry> {
     const data = await this.read();
@@ -78,3 +147,9 @@ export class IndexedDbLogRepository implements LogRepository {
     await this.write(data);
   }
 }
+
+export type PendingChange =
+  | { id: string; entity: 'log'; action: 'upsert'; record: LogEntry; queuedAt: string }
+  | { id: string; entity: 'log'; action: 'delete'; recordId: string; queuedAt: string }
+  | { id: string; entity: 'event'; action: 'upsert'; record: ScheduleEvent; queuedAt: string }
+  | { id: string; entity: 'event'; action: 'delete'; recordId: string; queuedAt: string };
