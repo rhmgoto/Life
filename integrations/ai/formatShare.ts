@@ -1,7 +1,7 @@
 import type { LogEntry, ScheduleEvent } from '@/domain/models';
 import { formatShortDate } from '@/lib/date';
 
-const typeLabel: Record<LogEntry['type'], string> = { P: '記録', B: 'アイデア', TODO: 'TODO' };
+const typeLabel: Record<LogEntry['type'], string> = { P: '私生活・日常', B: '仕事関係' };
 
 export function formatAiShare(logs: LogEntry[], events: ScheduleEvent[], from: string, to: string): string {
   const lines = [`【期間】`, `${from.replaceAll('-', '/')}〜${to.replaceAll('-', '/')}`, '', '【予定】'];

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { CloudDataStore } from '@/data/cloudDataStore';
 import type { AppData, LogEntry, ScheduleEvent } from '@/domain/models';
+import { normalizeLogType } from '@/domain/models';
 
 type LogRow = {
   id: string; date: string; time: string; body: string; type: LogEntry['type']; tags: string[];
@@ -24,7 +25,7 @@ export class SupabaseDataStore implements CloudDataStore {
     if (eventsResult.error) throw eventsResult.error;
     return {
       logs: (logsResult.data as LogRow[]).map((row) => ({
-        id: row.id, date: row.date, time: row.time.slice(0, 5), body: row.body, type: row.type,
+        id: row.id, date: row.date, time: row.time.slice(0, 5), body: row.body, type: normalizeLogType(row.type),
         tags: row.tags ?? [], createdAt: row.created_at, updatedAt: row.updated_at,
       })),
       events: (eventsResult.data as EventRow[]).map((row) => ({

@@ -1,4 +1,5 @@
 import type { AppData, EventDraft, LogDraft, LogEntry, ScheduleEvent } from '@/domain/models';
+import { normalizeLogType } from '@/domain/models';
 import type { LogRepository } from './logRepository';
 import { createSeedData } from './seed';
 
@@ -9,6 +10,10 @@ const META_STORE_NAME = 'metadata';
 const DATA_KEY = 'app-data-v1';
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const newId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
+const normalizeData = (data: AppData): AppData => ({
+  logs: data.logs.map((log) => ({ ...log, type: normalizeLogType(log.type) })),
+  events: data.events,
+});
 
 export class IndexedDbLogRepository implements LogRepository {
   private dbPromise?: Promise<IDBDatabase>;
@@ -34,7 +39,7 @@ export class IndexedDbLogRepository implements LogRepository {
       request.onsuccess = () => resolve(request.result as AppData | undefined);
       request.onerror = () => reject(request.error);
     });
-    if (value) return clone(value);
+    if (value) return normalizeData(clone(value));
     const seed = createSeedData();
     await this.write(seed);
     return clone(seed);
@@ -62,10 +67,10 @@ export class IndexedDbLogRepository implements LogRepository {
       });
       return [...records.values()];
     };
-    await this.write({ logs: merge(current.logs, imported.logs), events: merge(current.events, imported.events) });
+    await this.write(normalizeData({ logs: merge(current.logs, imported.logs), events: merge(current.events, imported.events) }));
   }
 
-  replaceAll(data: AppData): Promise<void> { return this.write(data); }
+  replaceAll(data: AppData): Promise<void> { return this.write(normalizeData(data)); }
 
   async getPendingChanges(): Promise<PendingChange[]> {
     const db = await this.open();

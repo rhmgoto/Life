@@ -1,10 +1,13 @@
 export const LOG_TYPES = [
-  { id: 'P', label: 'P', description: '出来事・考え' },
-  { id: 'B', label: 'B', description: 'アイデア' },
-  { id: 'TODO', label: 'TODO', description: 'やること' },
+  { id: 'P', label: 'P', description: '私生活・日常' },
+  { id: 'B', label: 'B', description: '仕事関係' },
 ] as const;
 
 export type LogTypeId = (typeof LOG_TYPES)[number]['id'];
+
+export function normalizeLogType(value: unknown): LogTypeId {
+  return value === 'B' ? 'B' : 'P';
+}
 
 export interface LogEntry {
   id: string;

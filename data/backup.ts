@@ -1,4 +1,5 @@
 import type { AppData, LogEntry, ScheduleEvent } from '@/domain/models';
+import { normalizeLogType } from '@/domain/models';
 
 interface BackupFile {
   app: 'MyLog';
@@ -42,5 +43,8 @@ export async function readBackup(file: File): Promise<AppData> {
     || !Array.isArray(parsed.data.events) || !parsed.data.events.every(isEvent)) {
     throw new Error('MyLogのバックアップファイルとして読み込めません。');
   }
-  return parsed.data;
+  return {
+    logs: parsed.data.logs.map((log) => ({ ...log, type: normalizeLogType(log.type) })),
+    events: parsed.data.events,
+  };
 }

@@ -17,7 +17,7 @@ import { SearchView } from '@/features/search/SearchView';
 import { AiShareView } from '@/features/share/AiShareView';
 import { TodayView } from '@/features/today/TodayView';
 import { toDateKey } from '@/lib/date';
-import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabaseClient';
+import { getSupabaseClient, isSupabaseConfigured, restoreSupabaseSession } from '@/lib/supabaseClient';
 
 const localRepository = new IndexedDbLogRepository();
 
@@ -37,7 +37,9 @@ export function MyLogApp() {
   useEffect(() => {
     if (!configured) return;
     const client = getSupabaseClient();
-    void client.auth.getSession().then(({ data: result }) => { setSession(result.session); setAuthReady(true); });
+    void restoreSupabaseSession()
+      .then((restoredSession) => setSession(restoredSession))
+      .finally(() => setAuthReady(true));
     const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setAuthReady(true);

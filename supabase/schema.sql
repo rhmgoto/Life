@@ -7,7 +7,7 @@ create table if not exists public.logs (
   date date not null,
   time time not null,
   body text not null,
-  type text not null check (type in ('P', 'B', 'TODO')),
+  type text not null check (type in ('P', 'B')),
   tags text[] not null default '{}',
   created_at timestamptz not null,
   updated_at timestamptz not null,

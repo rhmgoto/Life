@@ -1,7 +1,7 @@
 import type { LogEntry, ScheduleEvent } from '@/domain/models';
 import { formatLongDate, toDateKey, weekdayLabel } from '@/lib/date';
 
-const typeClass: Record<LogEntry['type'], string> = { P: 'p', B: 'b', TODO: 'todo' };
+const typeClass: Record<LogEntry['type'], string> = { P: 'p', B: 'b' };
 
 export function TodayView({ date, logs, events, onDateChange, onNewLog, onNewEvent, onEditLog, onEditEvent }: { date: string; logs: LogEntry[]; events: ScheduleEvent[]; onDateChange: (date: string) => void; onNewLog: () => void; onNewEvent: () => void; onEditLog: (log: LogEntry) => void; onEditEvent: (event: ScheduleEvent) => void }) {
   const isToday = date === toDateKey();

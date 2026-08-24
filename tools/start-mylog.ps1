@@ -2,13 +2,21 @@ param([switch]$NoBrowser)
 
 $ErrorActionPreference = 'Stop'
 $siteRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\docs'))
-$port = 8765
-$url = "http://127.0.0.1:$port/"
+$basePort = 8765
 
 if (-not (Test-Path -LiteralPath (Join-Path $siteRoot 'index.html'))) {
   Write-Host 'MyLog files were not found. Run pnpm build:pages first.' -ForegroundColor Red
   Read-Host 'Press Enter to close'
   exit 1
+}
+
+function Test-MyLogEndpoint([string]$Url) {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 2
+    return $response.StatusCode -eq 200 -and $response.Content -like '*<div id="root"></div>*'
+  } catch {
+    return $false
+  }
 }
 
 $mimeTypes = @{
@@ -22,9 +30,34 @@ $mimeTypes = @{
   '.ico' = 'image/x-icon'
 }
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+$listener = $null
+$port = $basePort
 try {
-  $listener.Start()
+  for ($candidatePort = $basePort; $candidatePort -le ($basePort + 20); $candidatePort++) {
+    $candidateUrl = "http://127.0.0.1:$candidatePort/"
+    try {
+      $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidatePort)
+      $listener.Start()
+      $port = $candidatePort
+      break
+    } catch [System.Net.Sockets.SocketException] {
+      if ($listener) {
+        $listener.Stop()
+        $listener = $null
+      }
+      if (Test-MyLogEndpoint $candidateUrl) {
+        Write-Host "MyLog is already running at $candidateUrl" -ForegroundColor Green
+        if (-not $NoBrowser) { Start-Process $candidateUrl }
+        exit 0
+      }
+    }
+  }
+
+  if (-not $listener) {
+    throw "Ports $basePort-$($basePort + 20) are already in use."
+  }
+
+  $url = "http://127.0.0.1:$port/"
   Write-Host "MyLog is running at $url" -ForegroundColor Green
   Write-Host 'Keep this window open while using MyLog.'
   if (-not $NoBrowser) { Start-Process $url }
@@ -78,5 +111,5 @@ try {
   Read-Host 'Press Enter to close'
   exit 1
 } finally {
-  $listener.Stop()
+  if ($listener) { $listener.Stop() }
 }
