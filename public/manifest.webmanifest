@@ -1,7 +1,7 @@
 {
   "name": "MyLog — 日々を、静かに残す",
   "short_name": "MyLog",
-  "description": "予定と記録をひとつの流れで残し、振り返るための自分専用ログ。",
+  "description": "日々のつぶやきと学びを残し、振り返り・AI共有に使える自分専用ログ。",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

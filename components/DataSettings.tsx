@@ -26,7 +26,7 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
       const imported = await readBackup(file);
       await repository.importData(imported);
       await onImported();
-      setMessage(`復元しました（記録 ${imported.logs.length}件、予定 ${imported.events.length}件）`);
+      setMessage(`復元しました（記録 ${imported.logs.length}件）`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '復元できませんでした。');
     }
@@ -41,7 +41,7 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
       </div>
       <section className="settings-section">
         <h3>バックアップ</h3>
-        <p>記録と予定をJSONファイルとして保存できます。定期的な書き出しをおすすめします。</p>
+        <p>記録をJSONファイルとして保存できます。定期的な書き出しをおすすめします。</p>
         <div className="settings-actions">
           <button className="primary-button" onClick={() => downloadBackup(data)}>バックアップを書き出す</button>
           <button className="ghost-button" onClick={() => inputRef.current?.click()}>バックアップから復元</button>

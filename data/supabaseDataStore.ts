@@ -4,7 +4,7 @@ import type { AppData, LogEntry, ScheduleEvent } from '@/domain/models';
 import { normalizeLogType } from '@/domain/models';
 
 type LogRow = {
-  id: string; date: string; time: string; body: string; type: LogEntry['type']; tags: string[];
+  id: string; date: string; time: string; title: string | null; body: string; type: LogEntry['type']; tags: string[];
   created_at: string; updated_at: string;
 };
 type EventRow = {
@@ -25,7 +25,7 @@ export class SupabaseDataStore implements CloudDataStore {
     if (eventsResult.error) throw eventsResult.error;
     return {
       logs: (logsResult.data as LogRow[]).map((row) => ({
-        id: row.id, date: row.date, time: row.time.slice(0, 5), body: row.body, type: normalizeLogType(row.type),
+        id: row.id, date: row.date, time: row.time.slice(0, 5), title: row.title || undefined, body: row.body, type: normalizeLogType(row.type),
         tags: row.tags ?? [], createdAt: row.created_at, updatedAt: row.updated_at,
       })),
       events: (eventsResult.data as EventRow[]).map((row) => ({
@@ -39,7 +39,7 @@ export class SupabaseDataStore implements CloudDataStore {
 
   async upsertLog(record: LogEntry): Promise<void> {
     const { error } = await this.client.from('logs').upsert({
-      id: record.id, user_id: this.userId, date: record.date, time: record.time, body: record.body,
+      id: record.id, user_id: this.userId, date: record.date, time: record.time, title: record.title ?? '', body: record.body,
       type: record.type, tags: record.tags, created_at: record.createdAt, updated_at: record.updatedAt,
     }, { onConflict: 'user_id,id' });
     if (error) throw error;

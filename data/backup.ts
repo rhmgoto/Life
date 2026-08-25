@@ -13,8 +13,10 @@ const isString = (value: unknown): value is string => typeof value === 'string';
 function isLog(value: unknown): value is LogEntry {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<LogEntry>;
+  const rawType = (value as { type?: unknown }).type;
   return isString(item.id) && isString(item.date) && isString(item.time) && isString(item.body)
-    && (item.type === 'P' || item.type === 'B' || item.type === 'TODO')
+    && (item.title === undefined || isString(item.title))
+    && (rawType === 'P' || rawType === 'B' || rawType === 'TODO' || rawType === 'PT' || rawType === 'BT' || rawType === 'PM' || rawType === 'BM')
     && Array.isArray(item.tags) && item.tags.every(isString) && isString(item.createdAt) && isString(item.updatedAt);
 }
 
@@ -44,7 +46,7 @@ export async function readBackup(file: File): Promise<AppData> {
     throw new Error('MyLogのバックアップファイルとして読み込めません。');
   }
   return {
-    logs: parsed.data.logs.map((log) => ({ ...log, type: normalizeLogType(log.type) })),
+    logs: parsed.data.logs.map((log) => ({ ...log, title: log.title?.trim() || undefined, type: normalizeLogType(log.type) })),
     events: parsed.data.events,
   };
 }

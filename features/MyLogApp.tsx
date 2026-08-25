@@ -4,14 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { AppNavigation, type ViewName } from '@/components/AppNavigation';
 import { DataSettings } from '@/components/DataSettings';
-import { EventEditor } from '@/components/EventEditor';
 import { LoginScreen } from '@/components/LoginScreen';
 import { LogEditor } from '@/components/LogEditor';
 import { IndexedDbLogRepository } from '@/data/indexedDbRepository';
 import type { LogRepository } from '@/data/logRepository';
 import { SupabaseDataStore } from '@/data/supabaseDataStore';
 import { SyncedLogRepository, type SyncState } from '@/data/syncedLogRepository';
-import type { AppData, EventDraft, LogDraft, LogEntry, ScheduleEvent } from '@/domain/models';
+import type { AppData, LogDraft, LogEntry } from '@/domain/models';
 import { CalendarView } from '@/features/calendar/CalendarView';
 import { SearchView } from '@/features/search/SearchView';
 import { AiShareView } from '@/features/share/AiShareView';
@@ -32,7 +31,6 @@ export function MyLogApp() {
   const [syncState, setSyncState] = useState<SyncState>('synced');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editingLog, setEditingLog] = useState<LogEntry | null | 'new'>(null);
-  const [editingEvent, setEditingEvent] = useState<ScheduleEvent | null | 'new'>(null);
 
   useEffect(() => {
     if (!configured) return;
@@ -76,12 +74,9 @@ export function MyLogApp() {
   }, [session, refresh]);
 
   const dayLogs = useMemo(() => data.logs.filter((log) => log.date === date).sort((a, b) => a.time.localeCompare(b.time)), [data.logs, date]);
-  const dayEvents = useMemo(() => data.events.filter((event) => event.date === date).sort((a, b) => a.startTime.localeCompare(b.startTime)), [data.events, date]);
   const openDay = (nextDate: string) => { setDate(nextDate); setView('today'); };
   const saveLog = async (draft: LogDraft) => { await repository.saveLog(draft, typeof editingLog === 'object' && editingLog ? editingLog.id : undefined); setEditingLog(null); await refresh(); };
   const deleteLog = async () => { if (typeof editingLog === 'object' && editingLog) { await repository.deleteLog(editingLog.id); setEditingLog(null); await refresh(); } };
-  const saveEvent = async (draft: EventDraft) => { await repository.saveEvent(draft, typeof editingEvent === 'object' && editingEvent ? editingEvent.id : undefined); setEditingEvent(null); await refresh(); };
-  const deleteEvent = async () => { if (typeof editingEvent === 'object' && editingEvent) { await repository.deleteEvent(editingEvent.id); setEditingEvent(null); await refresh(); } };
 
   if (!authReady || !ready) return <main className="auth-shell"><div className="loading-state"><span className="brand-mark">M</span><p>記録をひらいています…</p></div></main>;
   if (configured && !session) return <LoginScreen localData={data} />;
@@ -95,14 +90,13 @@ export function MyLogApp() {
     <section className="content">
       <button className={`sync-chip ${syncState}`} onClick={() => setSettingsOpen(true)} aria-label="保存と同期の設定を開く"><span>●</span>{storageLabel}<b>⋯</b></button>
       <>
-        {view === 'today' && <TodayView date={date} logs={dayLogs} events={dayEvents} onDateChange={setDate} onNewLog={() => setEditingLog('new')} onNewEvent={() => setEditingEvent('new')} onEditLog={setEditingLog} onEditEvent={setEditingEvent} />}
-        {view === 'calendar' && <CalendarView selectedDate={date} logs={data.logs} events={data.events} onMonthChange={setDate} onOpenDate={openDay} />}
+        {view === 'today' && <TodayView date={date} logs={dayLogs} onDateChange={setDate} onNewLog={() => setEditingLog('new')} onEditLog={setEditingLog} />}
+        {view === 'calendar' && <CalendarView selectedDate={date} logs={data.logs} onMonthChange={setDate} onOpenDate={openDay} />}
         {view === 'search' && <SearchView logs={data.logs} onOpenDate={openDay} />}
-        {view === 'share' && <AiShareView logs={data.logs} events={data.events} />}
+        {view === 'share' && <AiShareView logs={data.logs} />}
       </>
     </section>
     {editingLog && <LogEditor date={date} value={typeof editingLog === 'object' ? editingLog : undefined} onClose={() => setEditingLog(null)} onSave={(draft) => void saveLog(draft)} onDelete={typeof editingLog === 'object' ? () => void deleteLog() : undefined} />}
-    {editingEvent && <EventEditor date={date} value={typeof editingEvent === 'object' ? editingEvent : undefined} onClose={() => setEditingEvent(null)} onSave={(draft) => void saveEvent(draft)} onDelete={typeof editingEvent === 'object' ? () => void deleteEvent() : undefined} />}
     {settingsOpen && <DataSettings data={data} repository={repository} user={session?.user ?? null} configured={configured} onClose={() => setSettingsOpen(false)} onImported={refresh} onSignOut={async () => { await getSupabaseClient().auth.signOut(); setSettingsOpen(false); }} />}
   </main>;
 }

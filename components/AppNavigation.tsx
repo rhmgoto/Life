@@ -3,7 +3,7 @@ export type ViewName = 'today' | 'calendar' | 'search' | 'share';
 const items: Array<{ id: ViewName; label: string; icon: string }> = [
   { id: 'today', label: '今日', icon: '⌂' },
   { id: 'calendar', label: 'カレンダー', icon: '□' },
-  { id: 'search', label: '検索', icon: '⌕' },
+  { id: 'search', label: '振り返り', icon: '⌕' },
   { id: 'share', label: 'AI共有', icon: '✦' },
 ];
 

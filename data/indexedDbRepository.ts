@@ -11,7 +11,11 @@ const DATA_KEY = 'app-data-v1';
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const newId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
 const normalizeData = (data: AppData): AppData => ({
-  logs: data.logs.map((log) => ({ ...log, type: normalizeLogType(log.type) })),
+  logs: data.logs.map((log) => ({
+    ...log,
+    title: typeof log.title === 'string' && log.title.trim() ? log.title.trim() : undefined,
+    type: normalizeLogType(log.type),
+  })),
   events: data.events,
 });
 

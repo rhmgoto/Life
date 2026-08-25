@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mylog-shell-v2';
+const CACHE_NAME = 'mylog-shell-v3';
 const APP_SHELL = ['./', './index.html', './config.js', './mylog.css', './mylog.js', './manifest.webmanifest', './favicon.svg'];
 
 self.addEventListener('install', (event) => {
