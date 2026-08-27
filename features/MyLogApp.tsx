@@ -56,6 +56,11 @@ export function MyLogApp() {
   }, [session]);
 
   const refresh = useCallback(async () => {
+    try {
+      await repository.createDailyRecoverySnapshot();
+    } catch (error) {
+      console.warn('Daily recovery snapshot failed.', error);
+    }
     setData(await repository.getAll());
     setReady(true);
   }, [repository]);
@@ -76,6 +81,7 @@ export function MyLogApp() {
   const dayLogs = useMemo(() => data.logs.filter((log) => log.date === date).sort((a, b) => a.time.localeCompare(b.time)), [data.logs, date]);
   const openDay = (nextDate: string) => { setDate(nextDate); setView('today'); };
   const saveLog = async (draft: LogDraft) => { await repository.saveLog(draft, typeof editingLog === 'object' && editingLog ? editingLog.id : undefined); setEditingLog(null); await refresh(); };
+  const updateLog = async (log: LogEntry, draft: LogDraft) => { await repository.saveLog(draft, log.id); await refresh(); };
   const deleteLog = async () => { if (typeof editingLog === 'object' && editingLog) { await repository.deleteLog(editingLog.id); setEditingLog(null); await refresh(); } };
 
   if (!authReady || !ready) return <main className="auth-shell"><div className="loading-state"><span className="brand-mark">M</span><p>記録をひらいています…</p></div></main>;
@@ -92,7 +98,7 @@ export function MyLogApp() {
       <>
         {view === 'today' && <TodayView date={date} logs={dayLogs} onDateChange={setDate} onNewLog={() => setEditingLog('new')} onEditLog={setEditingLog} />}
         {view === 'calendar' && <CalendarView selectedDate={date} logs={data.logs} onMonthChange={setDate} onOpenDate={openDay} />}
-        {view === 'search' && <SearchView logs={data.logs} onOpenDate={openDay} />}
+        {view === 'search' && <SearchView logs={data.logs} onOpenDate={openDay} onSaveLog={updateLog} />}
         {view === 'share' && <AiShareView logs={data.logs} />}
       </>
     </section>

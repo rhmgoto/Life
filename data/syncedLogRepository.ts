@@ -14,6 +14,19 @@ const mergeRecords = <T extends { id: string; updatedAt: string }>(left: T[], ri
   return [...records.values()];
 };
 
+const isSeedRecord = (item: { id: string; createdAt: string; updatedAt: string }): boolean =>
+  item.id.startsWith('seed-') && item.createdAt === item.updatedAt;
+
+const userData = (data: AppData): AppData => ({
+  logs: data.logs.filter((item) => !isSeedRecord(item)),
+  events: data.events.filter((item) => !isSeedRecord(item)),
+});
+
+const hasUserData = (data: AppData): boolean => {
+  const useful = userData(data);
+  return useful.logs.length > 0 || useful.events.length > 0;
+};
+
 export class SyncedLogRepository implements LogRepository {
   private flushPromise?: Promise<void>;
   private readonly migrationKey: string;
@@ -33,10 +46,21 @@ export class SyncedLogRepository implements LogRepository {
       const migrated = await this.local.getMetadata(this.migrationKey);
       if (!migrated) return await this.migrateLocalData();
       await this.flush();
-      const cloudData = await this.cloud.getAll();
-      await this.local.replaceAll(cloudData);
+      const [localData, cloudData] = await Promise.all([this.local.getAll(), this.cloud.getAll()]);
+      if (hasUserData(localData)) await this.local.createRecoverySnapshot('before-cloud-sync', localData);
+      if (hasUserData(localData) && !hasUserData(cloudData)) {
+        await this.uploadAll(userData(localData));
+        this.onStateChange('synced');
+        return localData;
+      }
+      const merged = {
+        logs: mergeRecords(localData.logs, cloudData.logs),
+        events: mergeRecords(localData.events, cloudData.events),
+      };
+      await this.uploadAll(merged);
+      await this.local.replaceAll(merged);
       this.onStateChange('synced');
-      return cloudData;
+      return merged;
     } catch {
       this.onStateChange('offline');
       return this.local.getAll();
@@ -45,21 +69,26 @@ export class SyncedLogRepository implements LogRepository {
 
   private async migrateLocalData(): Promise<AppData> {
     const [localData, cloudData] = await Promise.all([this.local.getAll(), this.cloud.getAll()]);
+    if (hasUserData(localData)) await this.local.createRecoverySnapshot('before-initial-cloud-migration', localData);
     // 新しい端末で自動生成された未編集の見本データは、クラウドへ持ち込まない。
-    const localLogs = localData.logs.filter((item) => !(item.id.startsWith('seed-') && item.createdAt === item.updatedAt));
-    const localEvents = localData.events.filter((item) => !(item.id.startsWith('seed-') && item.createdAt === item.updatedAt));
+    const localUserData = userData(localData);
     const merged = {
-      logs: mergeRecords(cloudData.logs, localLogs),
-      events: mergeRecords(cloudData.events, localEvents),
+      logs: mergeRecords(cloudData.logs, localUserData.logs),
+      events: mergeRecords(cloudData.events, localUserData.events),
     };
-    await Promise.all([
-      ...merged.logs.map((record) => this.cloud.upsertLog(record)),
-      ...merged.events.map((record) => this.cloud.upsertEvent(record)),
-    ]);
+    await this.uploadAll(merged);
     await this.local.replaceAll(merged);
     await this.local.setMetadata(this.migrationKey, new Date().toISOString());
     this.onStateChange('synced');
     return merged;
+  }
+
+  private async uploadAll(data: AppData): Promise<void> {
+    const uploadData = userData(data);
+    await Promise.all([
+      ...uploadData.logs.map((record) => this.cloud.upsertLog(record)),
+      ...uploadData.events.map((record) => this.cloud.upsertEvent(record)),
+    ]);
   }
 
   async importData(data: AppData): Promise<void> {
@@ -71,6 +100,24 @@ export class SyncedLogRepository implements LogRepository {
     ]);
     await this.tryFlush();
     await this.local.replaceAll(merged);
+  }
+
+  createDailyRecoverySnapshot() {
+    return this.local.createDailyRecoverySnapshot();
+  }
+
+  getRecoverySnapshots() {
+    return this.local.getRecoverySnapshots();
+  }
+
+  async restoreRecoverySnapshot(id: string): Promise<AppData> {
+    const restored = await this.local.restoreRecoverySnapshot(id);
+    await Promise.all([
+      ...restored.logs.map((record) => this.queue({ id: `log:${record.id}`, entity: 'log', action: 'upsert', record, queuedAt: new Date().toISOString() })),
+      ...restored.events.map((record) => this.queue({ id: `event:${record.id}`, entity: 'event', action: 'upsert', record, queuedAt: new Date().toISOString() })),
+    ]);
+    await this.tryFlush();
+    return restored;
   }
 
   async saveLog(draft: LogDraft, id?: string): Promise<LogEntry> {

@@ -8,6 +8,9 @@ const STORE_NAME = 'records';
 const QUEUE_STORE_NAME = 'sync-queue';
 const META_STORE_NAME = 'metadata';
 const DATA_KEY = 'app-data-v1';
+const RECOVERY_SNAPSHOTS_KEY = 'recovery-snapshots-v1';
+const DAILY_RECOVERY_SNAPSHOT_DATE_KEY = 'daily-recovery-snapshot-date-v1';
+const MAX_RECOVERY_SNAPSHOTS = 5;
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const newId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
 const normalizeData = (data: AppData): AppData => ({
@@ -18,6 +21,21 @@ const normalizeData = (data: AppData): AppData => ({
   })),
   events: data.events,
 });
+
+const isSeedRecord = (item: { id: string; createdAt: string; updatedAt: string }): boolean =>
+  item.id.startsWith('seed-') && item.createdAt === item.updatedAt;
+
+const hasUserData = (data: AppData): boolean =>
+  data.logs.some((item) => !isSeedRecord(item)) || data.events.some((item) => !isSeedRecord(item));
+
+export type RecoverySnapshot = {
+  id: string;
+  reason: string;
+  createdAt: string;
+  logCount: number;
+  eventCount: number;
+  data: AppData;
+};
 
 export class IndexedDbLogRepository implements LogRepository {
   private dbPromise?: Promise<IDBDatabase>;
@@ -62,6 +80,7 @@ export class IndexedDbLogRepository implements LogRepository {
   getAll(): Promise<AppData> { return this.read(); }
 
   async importData(imported: AppData): Promise<void> {
+    await this.createRecoverySnapshot('before-backup-import');
     const current = await this.read();
     const merge = <T extends { id: string; updatedAt: string }>(existing: T[], incoming: T[]): T[] => {
       const records = new Map(existing.map((item) => [item.id, item]));
@@ -124,6 +143,60 @@ export class IndexedDbLogRepository implements LogRepository {
     });
   }
 
+  private async readRecoverySnapshots(): Promise<RecoverySnapshot[]> {
+    const raw = await this.getMetadata(RECOVERY_SNAPSHOTS_KEY);
+    if (!raw) return [];
+    try {
+      const snapshots = JSON.parse(raw) as RecoverySnapshot[];
+      if (!Array.isArray(snapshots)) return [];
+      return snapshots
+        .filter((snapshot) => snapshot.id && snapshot.createdAt && snapshot.data)
+        .map((snapshot) => ({ ...snapshot, data: normalizeData(snapshot.data) }))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, MAX_RECOVERY_SNAPSHOTS);
+    } catch {
+      return [];
+    }
+  }
+
+  async createRecoverySnapshot(reason: string, data?: AppData): Promise<void> {
+    const snapshotData = normalizeData(data ? clone(data) : await this.read());
+    if (!hasUserData(snapshotData)) return;
+    const current = await this.readRecoverySnapshots();
+    const snapshot: RecoverySnapshot = {
+      id: `snapshot-${Date.now()}`,
+      reason,
+      createdAt: new Date().toISOString(),
+      logCount: snapshotData.logs.length,
+      eventCount: snapshotData.events.length,
+      data: snapshotData,
+    };
+    await this.setMetadata(RECOVERY_SNAPSHOTS_KEY, JSON.stringify([snapshot, ...current].slice(0, MAX_RECOVERY_SNAPSHOTS)));
+  }
+
+  async createDailyRecoverySnapshot(): Promise<boolean> {
+    const today = new Date().toLocaleDateString('sv-SE');
+    if (await this.getMetadata(DAILY_RECOVERY_SNAPSHOT_DATE_KEY) === today) return false;
+    const data = await this.read();
+    if (!hasUserData(data)) return false;
+    await this.createRecoverySnapshot('daily-startup', data);
+    await this.setMetadata(DAILY_RECOVERY_SNAPSHOT_DATE_KEY, today);
+    return true;
+  }
+
+  async getRecoverySnapshots(): Promise<RecoverySnapshot[]> {
+    return this.readRecoverySnapshots();
+  }
+
+  async restoreRecoverySnapshot(id: string): Promise<AppData> {
+    const snapshots = await this.readRecoverySnapshots();
+    const snapshot = snapshots.find((item) => item.id === id);
+    if (!snapshot) throw new Error('復旧スナップショットが見つかりません。');
+    await this.createRecoverySnapshot('before-snapshot-restore');
+    await this.write(snapshot.data);
+    return normalizeData(clone(snapshot.data));
+  }
+
   async saveLog(draft: LogDraft, id?: string): Promise<LogEntry> {
     const data = await this.read();
     const existing = data.logs.find((item) => item.id === id);
@@ -135,6 +208,7 @@ export class IndexedDbLogRepository implements LogRepository {
   }
 
   async deleteLog(id: string): Promise<void> {
+    await this.createRecoverySnapshot('before-log-delete');
     const data = await this.read();
     data.logs = data.logs.filter((item) => item.id !== id);
     await this.write(data);
