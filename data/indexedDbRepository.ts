@@ -10,6 +10,8 @@ const META_STORE_NAME = 'metadata';
 const DATA_KEY = 'app-data-v1';
 const RECOVERY_SNAPSHOTS_KEY = 'recovery-snapshots-v1';
 const DAILY_RECOVERY_SNAPSHOT_DATE_KEY = 'daily-recovery-snapshot-date-v1';
+const SHADOW_DATA_KEY = 'mylog:last-known-good-data-v1';
+const SHADOW_RECOVERY_SNAPSHOTS_KEY = 'mylog:recovery-snapshots-v1';
 const MAX_RECOVERY_SNAPSHOTS = 5;
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const newId = (prefix: string): string => `${prefix}-${crypto.randomUUID()}`;
@@ -27,6 +29,33 @@ const isSeedRecord = (item: { id: string; createdAt: string; updatedAt: string }
 
 const hasUserData = (data: AppData): boolean =>
   data.logs.some((item) => !isSeedRecord(item)) || data.events.some((item) => !isSeedRecord(item));
+
+const readLocalStorage = (key: string): string | undefined => {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    return window.localStorage.getItem(key) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const writeLocalStorage = (key: string, value: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // IndexedDB is still the primary store; localStorage is a best-effort safety mirror.
+  }
+};
+
+const readJson = <T,>(raw: string | undefined): T | undefined => {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+};
 
 export type RecoverySnapshot = {
   id: string;
@@ -62,19 +91,39 @@ export class IndexedDbLogRepository implements LogRepository {
       request.onerror = () => reject(request.error);
     });
     if (value) return normalizeData(clone(value));
+    const shadow = this.readShadowData();
+    if (shadow) {
+      await this.write(shadow);
+      return clone(shadow);
+    }
     const seed = createSeedData();
     await this.write(seed);
     return clone(seed);
   }
 
   private async write(data: AppData): Promise<void> {
+    const normalized = normalizeData(data);
     const db = await this.open();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
-      tx.objectStore(STORE_NAME).put(clone(data), DATA_KEY);
+      tx.objectStore(STORE_NAME).put(clone(normalized), DATA_KEY);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+    this.writeShadowData(normalized);
+  }
+
+  private readShadowData(): AppData | undefined {
+    const data = readJson<AppData>(readLocalStorage(SHADOW_DATA_KEY));
+    if (!data) return undefined;
+    const normalized = normalizeData(data);
+    return hasUserData(normalized) ? normalized : undefined;
+  }
+
+  private writeShadowData(data: AppData): void {
+    const normalized = normalizeData(data);
+    if (!hasUserData(normalized)) return;
+    writeLocalStorage(SHADOW_DATA_KEY, JSON.stringify(normalized));
   }
 
   getAll(): Promise<AppData> { return this.read(); }
@@ -143,20 +192,48 @@ export class IndexedDbLogRepository implements LogRepository {
     });
   }
 
-  private async readRecoverySnapshots(): Promise<RecoverySnapshot[]> {
+  private normalizeRecoverySnapshots(snapshots: RecoverySnapshot[]): RecoverySnapshot[] {
+    return snapshots
+      .filter((snapshot) => snapshot.id && snapshot.createdAt && snapshot.data)
+      .map((snapshot) => ({ ...snapshot, data: normalizeData(snapshot.data) }))
+      .filter((snapshot) => hasUserData(snapshot.data))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, MAX_RECOVERY_SNAPSHOTS);
+  }
+
+  private readShadowRecoverySnapshots(): RecoverySnapshot[] {
+    const snapshots = readJson<RecoverySnapshot[]>(readLocalStorage(SHADOW_RECOVERY_SNAPSHOTS_KEY));
+    if (!Array.isArray(snapshots)) return [];
+    return this.normalizeRecoverySnapshots(snapshots);
+  }
+
+  private writeShadowRecoverySnapshots(snapshots: RecoverySnapshot[]): void {
+    writeLocalStorage(SHADOW_RECOVERY_SNAPSHOTS_KEY, JSON.stringify(this.normalizeRecoverySnapshots(snapshots)));
+  }
+
+  private mergeRecoverySnapshots(left: RecoverySnapshot[], right: RecoverySnapshot[]): RecoverySnapshot[] {
+    const snapshots = new Map<string, RecoverySnapshot>();
+    [...left, ...right].forEach((snapshot) => snapshots.set(snapshot.id, snapshot));
+    return this.normalizeRecoverySnapshots([...snapshots.values()]);
+  }
+
+  private async readIndexedRecoverySnapshots(): Promise<RecoverySnapshot[]> {
     const raw = await this.getMetadata(RECOVERY_SNAPSHOTS_KEY);
     if (!raw) return [];
     try {
       const snapshots = JSON.parse(raw) as RecoverySnapshot[];
       if (!Array.isArray(snapshots)) return [];
-      return snapshots
-        .filter((snapshot) => snapshot.id && snapshot.createdAt && snapshot.data)
-        .map((snapshot) => ({ ...snapshot, data: normalizeData(snapshot.data) }))
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .slice(0, MAX_RECOVERY_SNAPSHOTS);
+      return this.normalizeRecoverySnapshots(snapshots);
     } catch {
       return [];
     }
+  }
+
+  private async readRecoverySnapshots(): Promise<RecoverySnapshot[]> {
+    const snapshots = this.mergeRecoverySnapshots(await this.readIndexedRecoverySnapshots(), this.readShadowRecoverySnapshots());
+    if (snapshots.length) await this.setMetadata(RECOVERY_SNAPSHOTS_KEY, JSON.stringify(snapshots));
+    this.writeShadowRecoverySnapshots(snapshots);
+    return snapshots;
   }
 
   async createRecoverySnapshot(reason: string, data?: AppData): Promise<void> {
@@ -171,7 +248,10 @@ export class IndexedDbLogRepository implements LogRepository {
       eventCount: snapshotData.events.length,
       data: snapshotData,
     };
-    await this.setMetadata(RECOVERY_SNAPSHOTS_KEY, JSON.stringify([snapshot, ...current].slice(0, MAX_RECOVERY_SNAPSHOTS)));
+    const snapshots = this.normalizeRecoverySnapshots([snapshot, ...current]);
+    await this.setMetadata(RECOVERY_SNAPSHOTS_KEY, JSON.stringify(snapshots));
+    this.writeShadowRecoverySnapshots(snapshots);
+    this.writeShadowData(snapshotData);
   }
 
   async createDailyRecoverySnapshot(): Promise<boolean> {

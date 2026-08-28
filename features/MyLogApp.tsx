@@ -6,6 +6,7 @@ import { AppNavigation, type ViewName } from '@/components/AppNavigation';
 import { DataSettings } from '@/components/DataSettings';
 import { LoginScreen } from '@/components/LoginScreen';
 import { LogEditor } from '@/components/LogEditor';
+import { tryDailyLocalFileBackup } from '@/data/fileBackup';
 import { IndexedDbLogRepository } from '@/data/indexedDbRepository';
 import type { LogRepository } from '@/data/logRepository';
 import { SupabaseDataStore } from '@/data/supabaseDataStore';
@@ -61,7 +62,11 @@ export function MyLogApp() {
     } catch (error) {
       console.warn('Daily recovery snapshot failed.', error);
     }
-    setData(await repository.getAll());
+    const nextData = await repository.getAll();
+    void tryDailyLocalFileBackup(nextData).catch((error) => {
+      console.warn('Daily local file backup failed.', error);
+    });
+    setData(nextData);
     setReady(true);
   }, [repository]);
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { downloadBackup, readBackup } from '@/data/backup';
+import { chooseLocalFileBackupFolder, getLocalFileBackupStatus, type LocalFileBackupStatus, writeLocalFileBackupNow } from '@/data/fileBackup';
 import type { RecoverySnapshot } from '@/data/indexedDbRepository';
 import type { LogRepository } from '@/data/logRepository';
 import type { AppData } from '@/domain/models';
@@ -22,6 +23,8 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
   const [message, setMessage] = useState('');
   const [snapshots, setSnapshots] = useState<RecoverySnapshot[]>([]);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [fileBackupStatus, setFileBackupStatus] = useState<LocalFileBackupStatus>({ available: false, connected: false });
+  const [fileBackupBusy, setFileBackupBusy] = useState(false);
 
   const loadSnapshots = useCallback(async () => {
     setSnapshots(await repository.getRecoverySnapshots());
@@ -29,11 +32,40 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
 
   useEffect(() => {
     let active = true;
-    void repository.getRecoverySnapshots().then((items) => {
-      if (active) setSnapshots(items);
+    void Promise.all([repository.getRecoverySnapshots(), getLocalFileBackupStatus()]).then(([items, status]) => {
+      if (active) {
+        setSnapshots(items);
+        setFileBackupStatus(status);
+      }
     });
     return () => { active = false; };
   }, [repository]);
+
+  const connectFileBackup = async () => {
+    try {
+      setFileBackupBusy(true);
+      const status = await chooseLocalFileBackupFolder(data);
+      setFileBackupStatus(status);
+      setMessage(status.folderName ? `${status.folderName} に自動保存を設定しました。` : '自動保存を設定しました。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '自動保存を設定できませんでした。');
+    } finally {
+      setFileBackupBusy(false);
+    }
+  };
+
+  const writeFileBackup = async () => {
+    try {
+      setFileBackupBusy(true);
+      const fileName = await writeLocalFileBackupNow(data);
+      setFileBackupStatus(await getLocalFileBackupStatus());
+      setMessage(`${fileName} を保存しました。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '保存できませんでした。');
+    } finally {
+      setFileBackupBusy(false);
+    }
+  };
 
   const importFile = async (file?: File) => {
     if (!file) return;
@@ -67,22 +99,41 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="editor compact data-settings" role="dialog" aria-modal="true" aria-labelledby="data-settings-title">
       <header><div><p className="eyebrow">DATA & SYNC</p><h2 id="data-settings-title">保存と同期</h2></div><button className="icon-button" onClick={onClose} aria-label="閉じる">×</button></header>
-      <div className={`account-state ${user ? 'connected' : ''}`}>
-        <strong>{user ? 'クラウド同期を使用中' : configured ? 'ログインしていません' : 'この端末だけに保存中'}</strong>
-        <p>{user?.email ?? (configured ? 'ログインすると他の端末と同期できます。' : 'Supabaseを設定すると自動同期を始められます。')}</p>
-      </div>
       <section className="settings-section">
-        <h3>バックアップ</h3>
-        <p>記録をJSONファイルとして保存できます。定期的な書き出しをおすすめします。</p>
-        <div className="settings-actions">
-          <button className="primary-button" onClick={() => downloadBackup(data)}>バックアップを書き出す</button>
-          <button className="ghost-button" onClick={() => inputRef.current?.click()}>バックアップから復元</button>
-          <input ref={inputRef} hidden type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} />
+        <h3>保存状態</h3>
+        <div className="status-list">
+          <div className={`status-row ${user ? 'connected' : ''}`}>
+            <span>クラウド同期</span>
+            <strong>{user ? '使用中' : configured ? '未ログイン' : '未設定'}</strong>
+            <small>{user?.email ?? (configured ? 'ログインすると複数端末で同期できます。' : 'Supabaseを設定すると使えます。')}</small>
+          </div>
+          <div className={`status-row ${fileBackupStatus.connected ? 'connected' : ''}`}>
+            <span>PCフォルダ自動保存</span>
+            <strong>{fileBackupStatus.connected ? '設定済み' : '未設定'}</strong>
+            <small>{fileBackupStatus.available ? fileBackupStatus.connected ? `${fileBackupStatus.folderName ?? '選択したフォルダ'} に1日1回JSON保存します。` : '保存先フォルダを一度選ぶと、Windows PC上に自動保存できます。' : 'このブラウザでは使えません。ChromeまたはEdgeで使えます。'}</small>
+          </div>
         </div>
+        {fileBackupStatus.lastBackupAt && <p className="file-backup-note">最終保存: {new Date(fileBackupStatus.lastBackupAt).toLocaleString('ja-JP')}</p>}
+        {fileBackupStatus.available && <div className="settings-actions">
+          <button className="primary-button" disabled={fileBackupBusy} onClick={() => void connectFileBackup()}>{fileBackupStatus.connected ? '保存先フォルダを変更' : '保存先フォルダを選ぶ'}</button>
+          <button className="ghost-button" disabled={fileBackupBusy || !fileBackupStatus.folderName} onClick={() => void writeFileBackup()}>今すぐPCに保存</button>
+        </div>}
       </section>
       <section className="settings-section">
-        <h3>復旧スナップショット</h3>
-        <p>起動時は1日1回、同期や復元の前にも直近5件まで端末内へ自動保存します。データが消えたように見える時はここから戻せます。</p>
+        <h3>復元</h3>
+        <div className="restore-block">
+          <h4>PCフォルダのバックアップから復元</h4>
+          <p>PCに保存されたMyLogのJSONファイルから記録を戻します。</p>
+          <div className="settings-actions">
+            <button className="primary-button" onClick={() => inputRef.current?.click()}>JSONファイルを選ぶ</button>
+            <button className="ghost-button" onClick={() => downloadBackup(data)}>現在の状態を書き出す</button>
+            <input ref={inputRef} hidden type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])} />
+          </div>
+        </div>
+        <div className="restore-block">
+          <h4>最近の状態に戻す</h4>
+          <p>起動時、同期前、復元前などに残した直近5件の状態へ戻します。</p>
+        </div>
         {snapshots.length > 0 ? <div className="snapshot-list">
           {snapshots.map((snapshot) => <button key={snapshot.id} className="snapshot-item" disabled={restoringId !== null} onClick={() => void restoreSnapshot(snapshot)}>
             <span>{new Date(snapshot.createdAt).toLocaleString('ja-JP')}</span>
