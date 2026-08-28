@@ -6,25 +6,33 @@ import { downloadBackup, readBackup } from '@/data/backup';
 import { chooseLocalFileBackupFolder, getLocalFileBackupStatus, type LocalFileBackupStatus, writeLocalFileBackupNow } from '@/data/fileBackup';
 import type { RecoverySnapshot } from '@/data/indexedDbRepository';
 import type { LogRepository } from '@/data/logRepository';
+import type { SyncStatus } from '@/data/syncedLogRepository';
 import type { AppData } from '@/domain/models';
+import { getSupabaseClient } from '@/lib/supabaseClient';
 
 interface Props {
   data: AppData;
   repository: LogRepository;
   user: User | null;
   configured: boolean;
+  syncStatus: SyncStatus;
+  onSyncNow: () => Promise<void>;
   onClose: () => void;
   onImported: () => Promise<void>;
   onSignOut: () => Promise<void>;
 }
 
-export function DataSettings({ data, repository, user, configured, onClose, onImported, onSignOut }: Props) {
+export function DataSettings({ data, repository, user, configured, syncStatus, onSyncNow, onClose, onImported, onSignOut }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState('');
   const [snapshots, setSnapshots] = useState<RecoverySnapshot[]>([]);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [fileBackupStatus, setFileBackupStatus] = useState<LocalFileBackupStatus>({ available: false, connected: false });
   const [fileBackupBusy, setFileBackupBusy] = useState(false);
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   const loadSnapshots = useCallback(async () => {
     setSnapshots(await repository.getRecoverySnapshots());
@@ -96,16 +104,43 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
     }
   };
 
+  const setLoginPassword = async () => {
+    if (password.length < 8) return setMessage('パスワードは8文字以上にしてください。');
+    if (password !== passwordConfirm) return setMessage('確認用パスワードが一致しません。');
+    try {
+      setPasswordBusy(true);
+      const { error } = await getSupabaseClient().auth.updateUser({ password });
+      if (error) throw error;
+      setPassword('');
+      setPasswordConfirm('');
+      setMessage('ログイン用パスワードを設定しました。次回からメールを待たずにログインできます。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'パスワードを設定できませんでした。');
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const syncNow = async () => {
+    try {
+      setSyncBusy(true);
+      await onSyncNow();
+      setMessage('同期処理を実行しました。上の保存状態を確認してください。');
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="editor compact data-settings" role="dialog" aria-modal="true" aria-labelledby="data-settings-title">
       <header><div><p className="eyebrow">DATA & SYNC</p><h2 id="data-settings-title">保存と同期</h2></div><button className="icon-button" onClick={onClose} aria-label="閉じる">×</button></header>
       <section className="settings-section">
         <h3>保存状態</h3>
         <div className="status-list">
-          <div className={`status-row ${user ? 'connected' : ''}`}>
+          <div className={`status-row ${user && syncStatus.state === 'synced' && syncStatus.pendingCount === 0 ? 'connected' : ''}`}>
             <span>クラウド同期</span>
-            <strong>{user ? '使用中' : configured ? '未ログイン' : '未設定'}</strong>
-            <small>{user?.email ?? (configured ? 'ログインすると複数端末で同期できます。' : 'Supabaseを設定すると使えます。')}</small>
+            <strong>{user ? syncStatus.state === 'syncing' ? '同期中' : syncStatus.pendingCount > 0 ? `未同期 ${syncStatus.pendingCount}件` : syncStatus.state === 'offline' ? '再接続待ち' : '同期済み' : configured ? '未ログイン' : '未設定'}</strong>
+            <small>{user ? `${user.email ?? ''}${syncStatus.lastSyncedAt ? `　最終同期 ${new Date(syncStatus.lastSyncedAt).toLocaleString('ja-JP')}` : ''}` : configured ? 'ログインすると複数端末で同期できます。' : 'Supabaseを設定すると使えます。'}</small>
           </div>
           <div className={`status-row ${fileBackupStatus.connected ? 'connected' : ''}`}>
             <span>PCフォルダ自動保存</span>
@@ -114,11 +149,19 @@ export function DataSettings({ data, repository, user, configured, onClose, onIm
           </div>
         </div>
         {fileBackupStatus.lastBackupAt && <p className="file-backup-note">最終保存: {new Date(fileBackupStatus.lastBackupAt).toLocaleString('ja-JP')}</p>}
+        {syncStatus.error && <p className="sync-error">同期エラー: {syncStatus.error}</p>}
+        {user && <div className="settings-actions"><button className="primary-button" disabled={syncBusy} onClick={() => void syncNow()}>{syncBusy ? '確認中…' : '今すぐ同期'}</button></div>}
         {fileBackupStatus.available && <div className="settings-actions">
           <button className="primary-button" disabled={fileBackupBusy} onClick={() => void connectFileBackup()}>{fileBackupStatus.connected ? '保存先フォルダを変更' : '保存先フォルダを選ぶ'}</button>
           <button className="ghost-button" disabled={fileBackupBusy || !fileBackupStatus.folderName} onClick={() => void writeFileBackup()}>今すぐPCに保存</button>
         </div>}
       </section>
+      {user && <section className="settings-section">
+        <h3>ログイン用パスワード</h3>
+        <p>一度設定すると、別の端末でもメールを待たずにログインできます。</p>
+        <div className="password-settings"><label>新しいパスワード<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="8文字以上" /></label><label>確認<input type="password" autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} /></label></div>
+        <button className="primary-button" disabled={passwordBusy || !password || !passwordConfirm} onClick={() => void setLoginPassword()}>{passwordBusy ? '設定中…' : 'パスワードを設定'}</button>
+      </section>}
       <section className="settings-section">
         <h3>復元</h3>
         <div className="restore-block">

@@ -22,6 +22,8 @@ export interface LogEntry {
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  revision?: number;
+  deletedAt?: string;
 }
 
 export interface ScheduleEvent {

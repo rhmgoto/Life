@@ -13,7 +13,7 @@
 
 ## 保存と同期
 
-Supabaseを設定すると、ログインした利用者の記録をクラウドへ保存し、端末間で自動同期します。IndexedDBはオフライン時の保存先と未送信キューとして残るため、通信が戻ると再送されます。未設定時は従来どおり端末内だけで動作します。
+Supabaseを設定すると、ログインした利用者の記録をクラウドへ保存し、端末間で自動同期します。Supabaseを正本とし、IndexedDBはオフライン時の保存先と未送信キューとして使います。通信が戻ると未送信の変更だけを再送します。
 
 ログには任意の見出しと、`PT`（personal tubuyaki）、`BT`（business tubuyaki）、`PM`（personal manabi）、`BM`（business manabi）の種類を設定できます。旧`P`と`B`はSupabaseのスキーマ更新時に`PT`と`BT`へ移行されます。旧予定データはバックアップ互換性のため保存層に残しますが、画面には表示しません。
 
@@ -21,12 +21,14 @@ Supabaseを設定すると、ログインした利用者の記録をクラウド
 
 1. Supabaseでプロジェクトを作成します。
 2. Dashboardの **SQL Editor** で `supabase/schema.sql` を実行します。
-3. **Authentication → URL Configuration** でSite URLを `https://rhmgoto.github.io/Life/` にし、同じURLをRedirect URLsにも追加します。
-4. **Project Settings → API** からProject URLとPublishable key（旧anon key）を確認します。
-5. `public/config.js` の空欄へ2つの値を設定します。`service_role`キーは絶対に設定しないでください。
-6. `pnpm build:pages` を実行してGitHubへpushします。
+3. 既存プロジェクトでは、続けて `supabase/migrations/20260828_reliable_sync.sql` を実行します。
+4. **Authentication → URL Configuration** でSite URLを `https://rhmgoto.github.io/Life/` にし、同じURLをRedirect URLsにも追加します。
+5. **Authentication → Sessions** でSingle session per user、Time-boxed sessions、Inactivity timeoutを無効にします。
+6. **Project Settings → API** からProject URLとPublishable key（旧anon key）を確認します。
+7. `public/config.js` の空欄へ2つの値を設定します。`service_role`キーは絶対に設定しないでください。
+8. `pnpm build:pages` を実行してGitHubへpushします。
 
-初回ログイン時、その端末のIndexedDBにある記録をクラウドの記録と統合します。以後は30秒ごと、オンライン復帰時、画面へ戻った時にも同期します。
+初回はメールリンクでログインし、「保存と同期」からログイン用パスワードを設定できます。以後は同じメールアドレスとパスワードでログインします。30秒ごと、オンライン復帰時、画面へ戻った時にも同期します。編集前・削除前の内容はSupabaseの`log_history`へ保存されます。
 
 アプリの「保存と同期」から、全記録をJSONで書き出し・復元できます。クラウド同期とは別に、定期的なバックアップを推奨します。
 

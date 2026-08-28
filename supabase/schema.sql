@@ -10,13 +10,19 @@ create table if not exists public.logs (
   body text not null,
   type text not null check (type in ('PT', 'BT', 'PM', 'BM')),
   tags text[] not null default '{}',
-  created_at timestamptz not null,
-  updated_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  revision bigint not null default 1,
+  deleted_at timestamptz,
   primary key (user_id, id)
 );
 
 -- 既存プロジェクトを新しい見出し・種類へ安全に移行する。
 alter table public.logs add column if not exists title text not null default '';
+alter table public.logs add column if not exists revision bigint not null default 1;
+alter table public.logs add column if not exists deleted_at timestamptz;
+alter table public.logs alter column created_at set default now();
+alter table public.logs alter column updated_at set default now();
 alter table public.logs drop constraint if exists logs_type_check;
 update public.logs set type = case type when 'P' then 'PT' when 'B' then 'BT' else type end
 where type in ('P', 'B');

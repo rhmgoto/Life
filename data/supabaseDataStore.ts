@@ -5,49 +5,55 @@ import { normalizeLogType } from '@/domain/models';
 
 type LogRow = {
   id: string; date: string; time: string; title: string | null; body: string; type: LogEntry['type']; tags: string[];
-  created_at: string; updated_at: string;
+  created_at: string; updated_at: string; revision: number; deleted_at: string | null;
 };
-type EventRow = {
-  id: string; date: string; start_time: string; end_time: string | null; title: string; memo: string | null;
-  source: ScheduleEvent['source']; external_id: string | null; calendar_id: string | null;
-  created_at: string; updated_at: string;
-};
-
 export class SupabaseDataStore implements CloudDataStore {
   constructor(private client: SupabaseClient, private userId: string) {}
 
-  async getAll(): Promise<AppData> {
-    const [logsResult, eventsResult] = await Promise.all([
-      this.client.from('logs').select('*').eq('user_id', this.userId).order('date').order('time'),
-      this.client.from('events').select('*').eq('user_id', this.userId).order('date').order('start_time'),
-    ]);
-    if (logsResult.error) throw logsResult.error;
-    if (eventsResult.error) throw eventsResult.error;
+  private toLogEntry(row: LogRow): LogEntry {
     return {
-      logs: (logsResult.data as LogRow[]).map((row) => ({
-        id: row.id, date: row.date, time: row.time.slice(0, 5), title: row.title || undefined, body: row.body, type: normalizeLogType(row.type),
-        tags: row.tags ?? [], createdAt: row.created_at, updatedAt: row.updated_at,
-      })),
-      events: (eventsResult.data as EventRow[]).map((row) => ({
-        id: row.id, date: row.date, startTime: row.start_time.slice(0, 5),
-        endTime: row.end_time?.slice(0, 5) || undefined, title: row.title, memo: row.memo || undefined,
-        source: row.source, externalId: row.external_id || undefined, calendarId: row.calendar_id || undefined,
-        createdAt: row.created_at, updatedAt: row.updated_at,
-      })),
+      id: row.id, date: row.date, time: row.time.slice(0, 5), title: row.title || undefined,
+      body: row.body, type: normalizeLogType(row.type), tags: row.tags ?? [],
+      createdAt: row.created_at, updatedAt: row.updated_at, revision: row.revision,
+      deletedAt: row.deleted_at || undefined,
     };
   }
 
-  async upsertLog(record: LogEntry): Promise<void> {
-    const { error } = await this.client.from('logs').upsert({
-      id: record.id, user_id: this.userId, date: record.date, time: record.time, title: record.title ?? '', body: record.body,
-      type: record.type, tags: record.tags, created_at: record.createdAt, updated_at: record.updatedAt,
-    }, { onConflict: 'user_id,id' });
-    if (error) throw error;
+  private async getAllLogRows(): Promise<LogRow[]> {
+    const rows: LogRow[] = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const result = await this.client.from('logs').select('*').eq('user_id', this.userId)
+        .order('date').order('time').range(from, from + pageSize - 1);
+      if (result.error) throw result.error;
+      const page = result.data as LogRow[];
+      rows.push(...page);
+      if (page.length < pageSize) return rows;
+    }
   }
 
-  async deleteLog(id: string): Promise<void> {
-    const { error } = await this.client.from('logs').delete().eq('user_id', this.userId).eq('id', id);
+  async getAll(): Promise<AppData> {
+    const logRows = await this.getAllLogRows();
+    return {
+      logs: logRows.map((row) => this.toLogEntry(row)),
+      events: [],
+    };
+  }
+
+  async upsertLog(record: LogEntry): Promise<LogEntry> {
+    const { data, error } = await this.client.from('logs').upsert({
+      id: record.id, user_id: this.userId, date: record.date, time: record.time, title: record.title ?? '', body: record.body,
+      type: record.type, tags: record.tags, deleted_at: null,
+    }, { onConflict: 'user_id,id' }).select('*').single();
     if (error) throw error;
+    return this.toLogEntry(data as LogRow);
+  }
+
+  async deleteLog(id: string): Promise<LogEntry | undefined> {
+    const { data, error } = await this.client.from('logs').update({ deleted_at: new Date(0).toISOString() })
+      .eq('user_id', this.userId).eq('id', id).select('*').maybeSingle();
+    if (error) throw error;
+    return data ? this.toLogEntry(data as LogRow) : undefined;
   }
 
   async upsertEvent(record: ScheduleEvent): Promise<void> {

@@ -5,101 +5,67 @@ import type { AppData, EventDraft, LogDraft, LogEntry, ScheduleEvent } from '@/d
 
 export type SyncState = 'syncing' | 'synced' | 'offline';
 
-const mergeRecords = <T extends { id: string; updatedAt: string }>(left: T[], right: T[]): T[] => {
-  const records = new Map(left.map((item) => [item.id, item]));
-  right.forEach((item) => {
-    const previous = records.get(item.id);
-    if (!previous || item.updatedAt > previous.updatedAt) records.set(item.id, item);
-  });
-  return [...records.values()];
-};
+export interface SyncStatus {
+  state: SyncState;
+  pendingCount: number;
+  lastSyncedAt?: string;
+  error?: string;
+}
 
-const isSeedRecord = (item: { id: string; createdAt: string; updatedAt: string }): boolean =>
-  item.id.startsWith('seed-') && item.createdAt === item.updatedAt;
-
-const userData = (data: AppData): AppData => ({
-  logs: data.logs.filter((item) => !isSeedRecord(item)),
-  events: data.events.filter((item) => !isSeedRecord(item)),
-});
-
-const hasUserData = (data: AppData): boolean => {
-  const useful = userData(data);
-  return useful.logs.length > 0 || useful.events.length > 0;
+const errorMessage = (error: unknown): string => {
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
+  return 'クラウドと通信できませんでした。';
 };
 
 export class SyncedLogRepository implements LogRepository {
   private flushPromise?: Promise<void>;
-  private readonly migrationKey: string;
+  private lastSyncedAt?: string;
 
   constructor(
     private local: IndexedDbLogRepository,
     private cloud: CloudDataStore,
-    userId: string,
-    private onStateChange: (state: SyncState) => void,
-  ) {
-    this.migrationKey = `cloud-migration-v1:${userId}`;
+    _userId: string,
+    private onStatusChange: (status: SyncStatus) => void,
+  ) {}
+
+  private async report(state: SyncState, error?: string): Promise<void> {
+    this.onStatusChange({
+      state,
+      pendingCount: (await this.local.getPendingChanges()).length,
+      lastSyncedAt: this.lastSyncedAt,
+      error,
+    });
   }
 
   async getAll(): Promise<AppData> {
-    this.onStateChange('syncing');
+    await this.report('syncing');
     try {
-      const migrated = await this.local.getMetadata(this.migrationKey);
-      if (!migrated) return await this.migrateLocalData();
       await this.flush();
-      const [localData, cloudData] = await Promise.all([this.local.getAll(), this.cloud.getAll()]);
-      if (hasUserData(localData)) await this.local.createRecoverySnapshot('before-cloud-sync', localData);
-      if (hasUserData(localData) && !hasUserData(cloudData)) {
-        await this.uploadAll(userData(localData));
-        this.onStateChange('synced');
-        return localData;
+      const cloudData = await this.cloud.getAll();
+      const localData = await this.local.getAll();
+      if (localData.logs.some((log) => !log.deletedAt)) {
+        await this.local.createRecoverySnapshot('before-cloud-sync', localData);
       }
-      const merged = {
-        logs: mergeRecords(localData.logs, cloudData.logs),
-        events: mergeRecords(localData.events, cloudData.events),
-      };
-      await this.uploadAll(merged);
-      await this.local.replaceAll(merged);
-      this.onStateChange('synced');
-      return merged;
-    } catch {
-      this.onStateChange('offline');
+      // クラウドを正本とし、送信待ちキューにある変更だけをアップロードする。
+      await this.local.replaceAll(cloudData);
+      this.lastSyncedAt = new Date().toISOString();
+      await this.report('synced');
+      return cloudData;
+    } catch (error) {
+      await this.report('offline', errorMessage(error));
       return this.local.getAll();
     }
   }
 
-  private async migrateLocalData(): Promise<AppData> {
-    const [localData, cloudData] = await Promise.all([this.local.getAll(), this.cloud.getAll()]);
-    if (hasUserData(localData)) await this.local.createRecoverySnapshot('before-initial-cloud-migration', localData);
-    // 新しい端末で自動生成された未編集の見本データは、クラウドへ持ち込まない。
-    const localUserData = userData(localData);
-    const merged = {
-      logs: mergeRecords(cloudData.logs, localUserData.logs),
-      events: mergeRecords(cloudData.events, localUserData.events),
-    };
-    await this.uploadAll(merged);
-    await this.local.replaceAll(merged);
-    await this.local.setMetadata(this.migrationKey, new Date().toISOString());
-    this.onStateChange('synced');
-    return merged;
-  }
-
-  private async uploadAll(data: AppData): Promise<void> {
-    const uploadData = userData(data);
-    await Promise.all([
-      ...uploadData.logs.map((record) => this.cloud.upsertLog(record)),
-      ...uploadData.events.map((record) => this.cloud.upsertEvent(record)),
-    ]);
-  }
-
   async importData(data: AppData): Promise<void> {
     await this.local.importData(data);
-    const merged = await this.local.getAll();
     await Promise.all([
-      ...data.logs.map((record) => this.queue({ id: `log:${record.id}`, entity: 'log', action: 'upsert', record, queuedAt: new Date().toISOString() })),
+      ...data.logs.map((record) => record.deletedAt
+        ? this.queue({ id: `log:${record.id}`, entity: 'log', action: 'delete', recordId: record.id, queuedAt: new Date().toISOString() })
+        : this.queue({ id: `log:${record.id}`, entity: 'log', action: 'upsert', record, queuedAt: new Date().toISOString() })),
       ...data.events.map((record) => this.queue({ id: `event:${record.id}`, entity: 'event', action: 'upsert', record, queuedAt: new Date().toISOString() })),
     ]);
     await this.tryFlush();
-    await this.local.replaceAll(merged);
   }
 
   createDailyRecoverySnapshot() {
@@ -113,7 +79,9 @@ export class SyncedLogRepository implements LogRepository {
   async restoreRecoverySnapshot(id: string): Promise<AppData> {
     const restored = await this.local.restoreRecoverySnapshot(id);
     await Promise.all([
-      ...restored.logs.map((record) => this.queue({ id: `log:${record.id}`, entity: 'log', action: 'upsert', record, queuedAt: new Date().toISOString() })),
+      ...restored.logs.map((record) => record.deletedAt
+        ? this.queue({ id: `log:${record.id}`, entity: 'log', action: 'delete', recordId: record.id, queuedAt: new Date().toISOString() })
+        : this.queue({ id: `log:${record.id}`, entity: 'log', action: 'upsert', record, queuedAt: new Date().toISOString() })),
       ...restored.events.map((record) => this.queue({ id: `event:${record.id}`, entity: 'event', action: 'upsert', record, queuedAt: new Date().toISOString() })),
     ]);
     await this.tryFlush();
@@ -151,12 +119,13 @@ export class SyncedLogRepository implements LogRepository {
   }
 
   private async tryFlush(): Promise<void> {
-    this.onStateChange('syncing');
+    await this.report('syncing');
     try {
       await this.flush();
-      this.onStateChange('synced');
-    } catch {
-      this.onStateChange('offline');
+      this.lastSyncedAt = new Date().toISOString();
+      await this.report('synced');
+    } catch (error) {
+      await this.report('offline', errorMessage(error));
     }
   }
 
@@ -171,8 +140,7 @@ export class SyncedLogRepository implements LogRepository {
     for (const change of changes) {
       if (change.entity === 'log' && change.action === 'upsert') await this.cloud.upsertLog(change.record);
       if (change.entity === 'log' && change.action === 'delete') await this.cloud.deleteLog(change.recordId);
-      if (change.entity === 'event' && change.action === 'upsert') await this.cloud.upsertEvent(change.record);
-      if (change.entity === 'event' && change.action === 'delete') await this.cloud.deleteEvent(change.recordId);
+      // 予定機能は廃止済み。古い送信待ち予定はクラウド同期の成否に影響させない。
       await this.local.deletePendingChange(change.id);
     }
   }

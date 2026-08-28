@@ -39,18 +39,15 @@ export function getSupabaseClient(): SupabaseClient {
 
 export async function restoreSupabaseSession(): Promise<Session | null> {
   const client = getSupabaseClient();
-  const url = new URL(window.location.href);
-  const hasAuthCode = url.searchParams.has('code');
-
-  if (hasAuthCode) {
-    const { error } = await client.auth.exchangeCodeForSession(url.searchParams.get('code') ?? '');
-    url.searchParams.delete('code');
-    window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
-    if (error) {
-      console.warn('Supabase session exchange failed:', error.message);
+  // detectSessionInUrl に認証コードの交換を任せ、二重交換を避ける。
+  const { data, error } = await client.auth.getSession();
+  if (error) console.warn('Supabase session restore failed:', error.message);
+  if (data.session) {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has('code')) {
+      url.searchParams.delete('code');
+      window.history.replaceState(window.history.state, document.title, `${url.pathname}${url.search}${url.hash}`);
     }
   }
-
-  const { data } = await client.auth.getSession();
   return data.session;
 }

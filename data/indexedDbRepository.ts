@@ -20,6 +20,8 @@ const normalizeData = (data: AppData): AppData => ({
     ...log,
     title: typeof log.title === 'string' && log.title.trim() ? log.title.trim() : undefined,
     type: normalizeLogType(log.type),
+    revision: typeof log.revision === 'number' ? log.revision : 0,
+    deletedAt: typeof log.deletedAt === 'string' ? log.deletedAt : undefined,
   })),
   events: data.events,
 });
@@ -281,7 +283,7 @@ export class IndexedDbLogRepository implements LogRepository {
     const data = await this.read();
     const existing = data.logs.find((item) => item.id === id);
     const now = new Date().toISOString();
-    const record: LogEntry = { ...draft, id: existing?.id ?? newId('log'), createdAt: existing?.createdAt ?? now, updatedAt: now };
+    const record: LogEntry = { ...draft, id: existing?.id ?? newId('log'), createdAt: existing?.createdAt ?? now, updatedAt: now, revision: existing?.revision ?? 0, deletedAt: undefined };
     data.logs = existing ? data.logs.map((item) => item.id === id ? record : item) : [...data.logs, record];
     await this.write(data);
     return record;
@@ -290,7 +292,8 @@ export class IndexedDbLogRepository implements LogRepository {
   async deleteLog(id: string): Promise<void> {
     await this.createRecoverySnapshot('before-log-delete');
     const data = await this.read();
-    data.logs = data.logs.filter((item) => item.id !== id);
+    const now = new Date().toISOString();
+    data.logs = data.logs.map((item) => item.id === id ? { ...item, deletedAt: now, updatedAt: now } : item);
     await this.write(data);
   }
 
