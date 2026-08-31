@@ -78,7 +78,7 @@ try {
       $filePath = [System.IO.Path]::GetFullPath((Join-Path $siteRoot $relativePath.Replace('/', '\')))
       $isSafe = $filePath.StartsWith($siteRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 
-      if ($method -ne 'GET') {
+      if ($method -ne 'GET' -and $method -ne 'HEAD') {
         $status = '405 Method Not Allowed'
         $body = [System.Text.Encoding]::UTF8.GetBytes('Method Not Allowed')
         $contentType = 'text/plain; charset=utf-8'
@@ -96,8 +96,17 @@ try {
       $headers = "HTTP/1.1 $status`r`nContent-Type: $contentType`r`nContent-Length: $($body.Length)`r`nCache-Control: no-cache`r`nConnection: close`r`n`r`n"
       $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)
       $stream.Write($headerBytes, 0, $headerBytes.Length)
-      $stream.Write($body, 0, $body.Length)
+      if ($method -ne 'HEAD') {
+        $stream.Write($body, 0, $body.Length)
+      }
       $stream.Flush()
+    } catch [System.IO.IOException] {
+      # Browsers and security software may close a probe connection early.
+      # Ignore that single request and keep MyLog running.
+    } catch [System.Net.Sockets.SocketException] {
+      # A reset client connection must not stop the local server.
+    } catch [System.ObjectDisposedException] {
+      # The client closed while the response was being written.
     } finally {
       $client.Close()
     }
