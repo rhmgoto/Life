@@ -5,8 +5,14 @@ import { normalizeLogType } from '@/domain/models';
 
 type LogRow = {
   id: string; date: string; time: string; title: string | null; body: string; type: LogEntry['type']; tags: string[];
-  created_at: string; updated_at: string; revision: number; deleted_at: string | null;
+  created_at: string; updated_at: string; revision?: number; deleted_at?: string | null;
 };
+
+const isMissingDeletedAtColumn = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object' || !('message' in error) || typeof error.message !== 'string') return false;
+  return error.message.includes("'deleted_at' column") || error.message.includes('deleted_at');
+};
+
 export class SupabaseDataStore implements CloudDataStore {
   constructor(private client: SupabaseClient, private userId: string) {}
 
@@ -41,17 +47,30 @@ export class SupabaseDataStore implements CloudDataStore {
   }
 
   async upsertLog(record: LogEntry): Promise<LogEntry> {
-    const { data, error } = await this.client.from('logs').upsert({
+    const payload = {
       id: record.id, user_id: this.userId, date: record.date, time: record.time, title: record.title ?? '', body: record.body,
-      type: record.type, tags: record.tags, deleted_at: null,
-    }, { onConflict: 'user_id,id' }).select('*').single();
+      type: record.type, tags: record.tags,
+    };
+    const result = await this.client.from('logs').upsert({ ...payload, deleted_at: null }, { onConflict: 'user_id,id' }).select('*').single();
+    if (result.error && isMissingDeletedAtColumn(result.error)) {
+      const fallback = await this.client.from('logs').upsert(payload, { onConflict: 'user_id,id' }).select('*').single();
+      if (fallback.error) throw fallback.error;
+      return this.toLogEntry(fallback.data as LogRow);
+    }
+    const { data, error } = result;
     if (error) throw error;
     return this.toLogEntry(data as LogRow);
   }
 
   async deleteLog(id: string): Promise<LogEntry | undefined> {
-    const { data, error } = await this.client.from('logs').update({ deleted_at: new Date(0).toISOString() })
+    const result = await this.client.from('logs').update({ deleted_at: new Date(0).toISOString() })
       .eq('user_id', this.userId).eq('id', id).select('*').maybeSingle();
+    if (result.error && isMissingDeletedAtColumn(result.error)) {
+      const fallback = await this.client.from('logs').delete().eq('user_id', this.userId).eq('id', id);
+      if (fallback.error) throw fallback.error;
+      return undefined;
+    }
+    const { data, error } = result;
     if (error) throw error;
     return data ? this.toLogEntry(data as LogRow) : undefined;
   }
